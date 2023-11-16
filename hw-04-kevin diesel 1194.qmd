@@ -1,0 +1,717 @@
+---
+title: "HW-04"
+author: "Vinu kevin diesel"
+format: html
+editor: visual
+---
+
+# **Regression in R**
+
+```{r}
+options(repos = c(CRAN = "https://cran.rstudio.com"))
+```
+
+#### Required Packages
+
+```{r}
+install.packages("pacman")
+
+pacman::p_load(tidyverse, rpart, rpart.plot, caret, 
+  lattice, FSelector, sampling, pROC, mlbench, rsample, parsnip, yardstick, gridExtra, recipes, workflows, tidymodels, dplyr)
+```
+
+#### Data 
+
+```{r}
+data <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2023/2023-02-07/big_tech_stock_prices.csv')
+
+data
+```
+
+### Data pre-processing
+
+####  I will exclusively focus on the AAPL stock symbol to predict the final adjusted closing prices, utilizing various regression techniques. This decision is made as there are 12 years' worth of trading details for each stock symbol. 
+
+```{r}
+data <- na.omit(data)
+
+data$stock_symbol <- as.factor(data$stock_symbol) #Converting stock symbol as factor
+
+data <- data[data$stock_symbol == "AAPL",]
+
+data <- data %>%      #Removing the stock symbol and date before splitting the dataset and training the model
+  select(-date, -stock_symbol)
+
+#The historical trend is explained by the low and high of this AAPL stock over the years.
+```
+
+## **Multiple Linear Regression**
+
+#### Step 1: Split Input Data into Training and Test Sets
+
+```{r}
+numInstances <- nrow(data)
+prop_train <- 0.8  # Proportion of data for training (80%)
+
+numTrain <- round(prop_train * numInstances)  # Calculate number of training instances
+numTest <- numInstances - numTrain + 1
+
+set.seed(123) # For reproducibility
+
+split_obj <- initial_split(data, prop = prop_train)
+
+# Extract train and test data
+train_data <- training(split_obj)
+test_data <- testing(split_obj)
+
+# Extract X_train, X_test, y_train, y_test
+X_train <- select(train_data, -adj_close)  # Selecting all columns except 'adj_close' as features
+y_train <- pull(train_data, adj_close)     # Selecting 'adj_close' as the target
+
+X_test <- select(test_data, -adj_close)
+y_test <- pull(test_data, adj_close)
+```
+
+#### Step 2: Fit Regression Model to Training Set
+
+```{r}
+# Create a linear regression model specification
+lin_reg_spec <- linear_reg() |> 
+  set_engine("lm")
+
+
+# Fit the model to the training data
+lin_reg_fit <- lin_reg_spec |> 
+  fit(adj_close ~ ., data = train_data)
+
+
+```
+
+#### Step 3: Apply Model to the Test Set
+
+```{r}
+# Apply model to the test set
+y_pred_test <- predict(lin_reg_fit, new_data = test_data) |>
+  pull(.pred)
+```
+
+#### Step 4: Evaluate Model Performance on Test Set
+
+```{r}
+# Plotting true vs predicted values
+ggplot() + 
+  geom_point(aes(x = as.vector(y_test), y = y_pred_test), color = 'black') +
+  ggtitle('Comparing true and predicted values for test set') +
+  xlab('True values for close_adj') +
+  ylab('Predicted values for close_adj')
+```
+
+**Interpretation:**\
+
+The above plot signifies a strong correlation between the true (actual) values and the predicted values. Essentially, this alignment suggests that the model's predictions closely match the actual values in the test set. \
+
+```{r}
+# Prepare data for yardstick evaluation
+eval_data <- tibble(
+  truth = as.vector(y_test),
+  estimate = y_pred_test
+)
+
+# Model evaluation
+rmse_value <- rmse(data = eval_data, truth = truth, estimate = estimate)
+r2_value <- rsq(eval_data, truth = truth, estimate = estimate)
+
+cat("Root mean squared error =", sprintf("%.4f", rmse_value$.estimate), "\n")
+```
+
+**Interpretation:**\
+\
+The root mean squared error (RMSE) value of 0.4930 represents the average difference between the predicted 'adj_close' values and the actual 'adj_close' values. here, on an average, the model's predictions differ from the actual values by approximately 0.4930 units, providing an indication of the model's prediction accuracy.
+
+```{r}
+cat('R-squared =', sprintf("%.4f", r2_value$.estimate), "\n")
+```
+
+**Interpretation:**
+
+An R-squared value of 0.9999 indicates an extremely high goodness of fit, suggesting that approximately 99.99% of the variability in the 'adj_close' values is explained by the model's predictors.
+
+#### Step 5: Postprocessing
+
+```{r}
+# Assuming lin_reg_fit contains the trained linear regression model
+
+# Display model parameters (coefficients and intercept)
+coef_values <- coef(lin_reg_fit$fit)  # Extracting coefficients
+coefficients <- coef_values[-1]  # Excluding the intercept
+
+cat("Intercept =", coef_values[1], "\n")
+
+for (i in seq_along(coefficients)) {
+  cat("Coefficient for", names(coefficients)[i], "=", coefficients[i], "\n")
+}
+
+```
+
+**Interpretation:** \
+\
+The intercept of approximately -2.45 indicates the baseline 'adj_close' value, while the coefficients represent the impact of each predictor on the 'adj_close': 'high' positively influences it by around 0.07476 units, 'close' has the most significant positive effect with about 0.97975 unit increase, 'open' and 'low' negatively impact it by around 0.02803 and 0.01716 units respectively, and 'volume' has a very minimal positive effect of approximately 2.442862e-10 units.
+
+```{r}
+
+### Step 4: Postprocessing
+
+# Plot outputs
+
+
+data_plot <- data.frame(open = X_test$open, high = X_test$high, low = X_test$low, 
+                        close = X_test$close, volume = X_test$volume,
+                        y_test = y_test, y_pred_test = y_pred_test)
+
+ggplot(data_plot) +
+  geom_point(aes(x = close, y = y_test), color = 'black') +  # Adjust 'x' and 'y' as needed
+  geom_line(aes(x = close, y = y_pred_test), color = 'blue', size = 1) +  # Adjust 'x' and 'y' as needed
+  xlab('Close') +  # Adjust x-axis label
+  ylab('adj_close')  # Adjust y-axis label
+
+```
+
+**Interpretation:**
+
+The blue line (model predictions) is in line with the black points (actual values), it suggests that the model is making predictions that are very close to the true values of the target variable. This alignment is a strong indicator of a well-performing model on the test data.
+
+## **Effect of Correlated Attributes**
+
+```{r}
+# Generate the variables - Skip this step as you already have the columns
+
+# Create plots for correlations among 9input features
+plot1 <- ggplot(data) +
+  geom_point(aes(open, high), color = 'black') +
+  xlab('Open') + ylab('High') +
+  ggtitle(sprintf("Correlation between Open and High = %.4f", cor(data$open, data$high))) +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.title.position = "plot",
+        plot.margin = margin(t = 20))  # Adjust the top margin
+
+plot2 <- ggplot(data) +
+  geom_point(aes(high, low), color = 'black') +
+  xlab('High') + ylab('Low') +
+  ggtitle(sprintf("Correlation between High and Low = %.4f", cor(data$high, data$low))) +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.title.position = "plot",
+        plot.margin = margin(t = 20))  # Adjust the top margin
+
+plot3 <- ggplot(data) +
+  geom_point(aes(low, close), color = 'black') +
+  xlab('Low') + ylab('Close') +
+  ggtitle(sprintf("Correlation between Low and Close = %.4f", cor(data$low, data$close))) +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.title.position = "plot",
+        plot.margin = margin(t = 20))  # Adjust the top margin
+
+plot4 <- ggplot(data) +
+  geom_point(aes(close, high), color = 'black') +
+  xlab('Close') + ylab('high') +
+  ggtitle(sprintf("Correlation between Close and high = %.4f", cor(data$close, data$high))) +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.title.position = "plot",
+        plot.margin = margin(t = 20))  # Adjust the top margin
+
+# Combine plots into a 2x2 grid
+library(gridExtra)
+grid.arrange(plot1, plot2, plot3, plot4, ncol = 2)
+
+```
+
+**Interpretation:** \
+These correlation values such as 0.999, 0.9998, 0.9999, and 0.9999 for 'Open-High', 'High-Low', 'Low-Close', and 'Close-High' relationships respectively, indicate extremely strong positive linear relationships between the variables. The 0.999 correlation Indicates an incredibly strong linear relationship close to perfect positive correlation. For instance, 'Open-High' and 'Close-High' having a correlation of 0.9999 means that when one variable increases, the other almost always increases proportionally.\
+
+```{r}
+# Split data into training and testing sets
+
+# Split data into training and testing sets
+train_indices <- 1:(numInstances - numTest)
+test_indices <- (numInstances - numTest + 1):numInstances
+
+# Create combined training and testing sets for different combinations of columns
+X_train2 <- data[train_indices, c('open', 'high')]
+X_test2 <- data[test_indices, c('open', 'high')]
+
+X_train3 <- data[train_indices, c('open', 'high', 'low')]
+X_test3 <- data[test_indices, c('open', 'high', 'low')]
+
+X_train4 <- data[train_indices, c('open', 'high', 'low', 'close')]
+X_test4 <- data[test_indices, c('open', 'high', 'low', 'close')]
+
+X_train5 <- data[train_indices, c('open', 'high', 'low', 'close', 'volume')]
+X_test5 <- data[test_indices, c('open', 'high', 'low', 'close', 'volume')]
+
+
+```
+
+```{r}
+
+# Convert matrices to tibbles for training
+train_data2 <- tibble(
+  open = pull(X_train2, open),
+  high = pull(X_train2, high),
+  adj_close = y_train
+)
+
+train_data3 <- tibble(
+  open = pull(X_train3, open),
+  high = pull(X_train3, high),
+  low = pull(X_train3, low),
+  adj_close = y_train
+)
+
+train_data4 <- tibble(
+  open = pull(X_train4, open),
+  high = pull(X_train4, high),
+  low = pull(X_train4, low),
+  close = pull(X_train4, close),
+  adj_close = y_train
+)
+
+train_data5 <- tibble(
+  open = pull(X_train5, open),
+  high = pull(X_train5, high),
+  low = pull(X_train5, low),
+  close = pull(X_train5, close),
+  volume = pull(X_train5, volume),
+  adj_close = y_train
+)
+
+# Train models
+regr2_spec <- linear_reg() %>% set_engine("lm")
+regr2_fit <- regr2_spec %>% fit(adj_close ~ open + high, data = train_data2)
+
+regr3_spec <- linear_reg() %>% set_engine("lm")
+regr3_fit <- regr3_spec %>% fit(adj_close ~ open + high + low, data = train_data3)
+
+regr4_spec <- linear_reg() %>% set_engine("lm")
+regr4_fit <- regr4_spec %>% fit(adj_close ~ open + high + low + close, data = train_data4)
+
+regr5_spec <- linear_reg() %>% set_engine("lm")
+regr5_fit <- regr5_spec %>% fit(adj_close ~ open + high + low + close + volume, data = train_data5)
+
+```
+
+```{r}
+# Convert matrices to data.frames for predictions
+new_train_data2 <- setNames(as.data.frame(X_train2), c("open", "high"))
+new_test_data2 <- setNames(as.data.frame(X_test2), c("open", "high"))
+
+new_train_data3 <- setNames(as.data.frame(X_train3), c("open", "high", "low"))
+new_test_data3 <- setNames(as.data.frame(X_test3), c("open", "high", "low"))
+
+new_train_data4 <- setNames(as.data.frame(X_train4), c("open", "high", "low", "close"))
+new_test_data4 <- setNames(as.data.frame(X_test4), c("open", "high", "low", "close"))
+
+new_train_data5 <- setNames(as.data.frame(X_train5), c("open", "high", "low", "close", "volume"))
+new_test_data5 <- setNames(as.data.frame(X_test5), c("open", "high", "low", "close", "volume"))
+
+# Predictions
+y_pred_train2 <- predict(regr2_fit, new_data = new_train_data2)
+y_pred_test2 <- predict(regr2_fit, new_data = new_test_data2)
+
+y_pred_train3 <- predict(regr3_fit, new_data = new_train_data3)
+y_pred_test3 <- predict(regr3_fit, new_data = new_test_data3)
+
+y_pred_train4 <- predict(regr4_fit, new_data = new_train_data4)
+y_pred_test4 <- predict(regr4_fit, new_data = new_test_data4)
+
+y_pred_train5 <- predict(regr5_fit, new_data = new_train_data5)
+y_pred_test5 <- predict(regr5_fit, new_data = new_test_data5)
+
+```
+
+```{r}
+# Extract coefficients and intercepts
+get_coef <- function(model) {
+  coef <- coefficients(model$fit)
+  coef
+}
+
+# Calculate RMSE
+calculate_rmse <- function(actual, predicted) {
+  rmse <- sqrt(mean((actual - predicted)^2))
+  rmse
+}
+
+results <- tibble(
+  Model = c(sprintf("%.2f open + %.2f high + %.2f", get_coef(regr2_fit)['open'], get_coef(regr2_fit)['high'], get_coef(regr2_fit)['(Intercept)']),
+            sprintf("%.2f open + %.2f high + %.2f low + %.2f", get_coef(regr3_fit)['open'], get_coef(regr3_fit)['high'], get_coef(regr3_fit)['low'], get_coef(regr3_fit)['(Intercept)']),
+            sprintf("%.2f open + %.2f high + %.2f low + %.2f close + %.2f", get_coef(regr4_fit)['open'], get_coef(regr4_fit)['high'], get_coef(regr4_fit)['low'], get_coef(regr4_fit)['close'], get_coef(regr4_fit)['(Intercept)']),
+            sprintf("%.2f open + %.2f high + %.2f low + %.2f close + %.2f volume + %.2f", get_coef(regr5_fit)['open'], get_coef(regr5_fit)['high'], get_coef(regr5_fit)['low'], get_coef(regr5_fit)['close'], get_coef(regr5_fit)['volume'], get_coef(regr5_fit)['(Intercept)'])),
+
+  Train_error = c(calculate_rmse(y_train, y_pred_train2$.pred),
+                  calculate_rmse(y_train, y_pred_train3$.pred),
+                  calculate_rmse(y_train, y_pred_train4$.pred),
+                  calculate_rmse(y_train, y_pred_train5$.pred)),
+
+  Test_error = c(calculate_rmse(y_test, y_pred_test2$.pred),
+                 calculate_rmse(y_test, y_pred_test3$.pred),
+                 calculate_rmse(y_test, y_pred_test4$.pred),
+                 calculate_rmse(y_test, y_pred_test5$.pred)),
+
+  Sum_of_Absolute_Weights = c(sum(abs(get_coef(regr2_fit))),
+                              sum(abs(get_coef(regr3_fit))),
+                              sum(abs(get_coef(regr4_fit))),
+                              sum(abs(get_coef(regr5_fit))))
+)
+
+
+# Plotting
+ggplot(results, aes(x = Sum_of_Absolute_Weights)) +
+  geom_line(aes(y = Train_error, color = "Train error"), linetype = "solid") +
+  geom_line(aes(y = Test_error, color = "Test error"), linetype = "dashed") +
+  labs(x = "Sum of Absolute Weights", y = "Error rate") +
+  scale_color_manual(values = c("Train error" = "blue", "Test error" = "red")) +
+  theme_minimal()
+
+```
+
+**Interpretation:** \
+The dashed red line represents the test error, while the solid blue line represents the train error. When these lines run (somewhat for red dashed line) parallel to the x-axis without much fluctuation, it suggests that as the "Sum of Absolute Weights" changes or increases, the error rates for both training and testing data remain relatively constant. Parallel lines mean that the model's performance or error rate is consistent regardless of the change in the feature weights or their combined magnitude, which suggests a specific trend.
+
+```{r}
+results
+```
+
+**Interpretation:**
+
+The above are the coefficients and errors of linear regression models that use various combinations of 'Open', 'High', 'Low', 'Close', and 'Volume' to predict a target variable.
+
+The model coefficients indicate the weight each feature holds in predicting the target variable. For instance: For the Model 1: The relationship between 'Open' and the target variable is negatively significant (-1.36), while 'High' has a positive impact (1.32). The intercept is 50.01. This model has a training error of 47.57 and a test error of 48.89. The Model 2: It adds 'Low' as an additional predictor to Model 1. 'Open' and 'High' coefficients are slightly different, and 'Low' has a small negative impact (-0.04). The errors have slightly changed, indicating a minor improvement. Next, the Model 3: Includes 'Close' as another predictor. 'Open', 'High', and 'Low' coefficients shift, and 'Close' has a positive impact (0.66) on the prediction. However, the errors are quite close to the errors of the previous models. Finally, the Model 4: Involves 'Volume' as an additional predictor. The coefficients for 'Open', 'High', 'Low', and 'Close' adjust again, and 'Volume' has a minimal effect (-0.00) in this case. However, the errors in this model are slightly higher compared to the previous ones, both in training and testing.
+
+## **Ridge Regression**
+
+```{r}
+# Set up a Ridge regression model specification
+ridge_spec <- linear_reg(penalty = 0.4, mixture = 1) %>% 
+  set_engine("glmnet")
+
+# Fit the model
+ridge_fit <- ridge_spec %>% 
+  fit(adj_close ~ ., data = train_data)
+
+# Make predictions
+y_pred_train_ridge <- predict(ridge_fit, new_data = train_data)$.pred
+y_pred_test_ridge <- predict(ridge_fit, new_data = test_data)$.pred
+
+# Calculate RMSE
+calculate_rmse <- function(actual, predicted) {
+  rmse <- sqrt(mean((actual - predicted)^2))
+  rmse
+}
+
+# Extract coefficients
+ridge_coef <- coefficients(ridge_fit$fit)
+
+# Prepare model expression
+model_expr <- paste(
+  paste(round(ridge_coef[-1], 2), names(ridge_coef[-1]), sep = " * ", collapse = " + "), 
+  "+", 
+  round(ridge_coef[1], 2)
+)
+
+# Create tibble with Ridge model information
+values_ridge <- tibble(
+  Model = model_expr,
+  Train_error = calculate_rmse(train_data$adj_close, y_pred_train_ridge),
+  Test_error = calculate_rmse(test_data$adj_close, y_pred_test_ridge),
+  Sum_of_Absolute_Weights = sum(abs(ridge_coef))
+)
+
+# Combining the results with previous results
+final_results <- bind_rows(results, values_ridge)
+
+final_results
+
+```
+
+**Interpretation:**
+
+The first four models exhibit relatively higher training and test errors compared to the last model. However, the last model with an extremely low error values seems unusual due to the high sum of absolute weights, suggesting overfitting or high complexity despite the low error.
+
+## **Lasso Regression**
+
+```{r}
+
+# Define the lasso specification
+lasso_spec <- linear_reg(penalty = 0.02, mixture = 1) %>% 
+  set_engine("glmnet")
+
+# Convert matrices to data frames
+X_train_df <- as.data.frame(X_train5)
+X_test_df <- as.data.frame(X_test5)
+
+# Combine the data correctly
+train_data <- cbind(y = y_train, X_train_df)
+new_test_data_lasso <- X_test_df
+
+# Fit the model
+lasso_fit <- lasso_spec %>%
+  fit(y ~ ., data = train_data)
+
+# Predictions
+y_pred_train_lasso <- predict(lasso_fit, new_data = train_data)$.pred
+y_pred_test_lasso <- predict(lasso_fit, new_data = new_test_data_lasso)$.pred
+
+# Extract coefficients
+lasso_coefs <- lasso_fit$fit$beta[, 1]
+
+# Model equation string
+model7 <- sprintf(
+  "%.2f X1 + %.2f X2 + %.2f X3 + %.2f X4 + %.2f X5 + %.2f",
+  lasso_coefs[2], lasso_coefs[3], lasso_coefs[4],
+  lasso_coefs[5], lasso_coefs[6], lasso_fit$fit$a0[1]
+)
+
+# Calculating errors and sum of absolute weights
+train_error <- sqrt(mean((y_train - y_pred_train_lasso)^2))
+test_error <- sqrt(mean((y_test - y_pred_test_lasso)^2))
+sum_absolute_weights <- sum(abs(lasso_coefs[-1])) + abs(lasso_fit$fit$a0[1])
+
+# Results tibble
+lasso_results <- tibble(
+  Model = "Lasso",
+  `Train error` = train_error,
+  `Test error` = test_error,
+  `Sum of Absolute Weights` = sum_absolute_weights
+)
+
+lasso_results
+
+
+
+
+
+```
+
+**Interpretation:** \
+\
+The model shows a comparatively higher test error than the train error, which is expected but still indicates some level of discrepancy in predictions for the test dataset. The sum of absolute weights is relatively lower, implying that the lasso regression has potentially reduced the impact of certain predictors by setting their coefficients closer to zero
+
+## **Hyperparameter Selection via Cross-Validation**
+
+```{r}
+
+# Combine training data
+y_train <- as.vector(y_train)
+
+# Convert matrices to data frames
+X_train_df <- as.data.frame(X_train5)
+X_test_df <- as.data.frame(X_test5)
+
+# Combine the data correctly
+train_data <- cbind(y = y_train, X_train_df)
+
+# Define recipe
+recipe_obj <- recipe(y ~ ., data = train_data) %>%
+  step_normalize(all_predictors()) |>
+  prep()
+
+# Define the ridge specification
+ridge_spec <- linear_reg(penalty = tune(), mixture = 0) %>% 
+  set_engine("glmnet")
+
+# Ridge workflow
+ridge_wf <- workflow() |>
+  add_model(ridge_spec) |>
+  add_recipe(recipe_obj)
+
+# Grid of alphas
+alphas <- tibble(penalty = c(0.2, 0.4, 0.6, 0.8, 1.0))
+
+# Tune
+tune_results <- 
+  ridge_wf |>
+  tune_grid(
+  resamples = bootstraps(train_data, times = 5),
+  grid = alphas
+)
+
+
+# Extract best parameters
+best_params <- tune_results %>% select_best("rmse")
+
+# Refit the model
+ridge_fit <- ridge_spec %>%
+  finalize_model(best_params) %>%
+  fit(y ~ ., data = train_data)
+
+# Extract coefficients
+ridge_coefs <- ridge_fit$fit$beta[,1]
+
+# Predictions
+y_pred_train_ridge <- predict(ridge_fit, new_data = train_data)$.pred
+y_pred_test_ridge <- predict(ridge_fit, new_data = X_test_df)$.pred
+
+# Create the model string
+model6 <- sprintf("%.2f X + %.2f X2 + %.2f X3 + %.2f X4 + %.2f X5 + %.2f", 
+                  ridge_coefs[2], ridge_coefs[3], ridge_coefs[4], 
+                  ridge_coefs[5], ridge_coefs[6], ridge_fit$fit$a0[1])
+
+values6 <- c(model6, 
+             sqrt(mean((y_train - y_pred_train_ridge)^2)),
+             sqrt(mean((y_test - y_pred_test_ridge)^2)),
+             sum(abs(ridge_coefs[-1])) + abs(ridge_fit$fit$a0[1]))
+
+# Make the results tibble
+ridge_results <- tibble(Model = "RidgeCV",
+                        `Train error` = values6[2], 
+                        `Test error` = values6[3], 
+                        `Sum of Absolute Weights` = values6[4])
+
+cat("Selected alpha =", best_params$penalty, "\n")
+```
+
+**Interpretation:** \
+\
+The RidgeCV method, through cross-validation, determined that an alpha of 1 resulted in the best performance based on the evaluation metric used (in this case, likely RMSE or another chosen metric).
+
+```{r}
+all_results <- bind_rows(results, ridge_results)
+all_results
+```
+
+**Interpretation:**
+
+These metrics (Train_error, Test_error and sum of abs weights) together provide insights into the RidgeCV model's performance in both training and unseen (test) data, as well as the degree of regularization or shrinkage applied to the model coefficients. It's noticeable that the RidgeCV model has consistent performance in terms of train error across these models (around 47.57), whereas test errors vary slightly, typically ranging from 48.88 to 49.15. The RidgeCV model tends to have comparatively lower sums of absolute weights in contrast to Models 1, 2, 3, and 4. This indicates that the RidgeCV model might be imposing less complexity by shrinking coefficients of predictors more effectively, suggesting a tendency towards simpler models. A lower sum of absolute weights in the RidgeCV model typically tells us that it has more restrained model complexity, often indicating better generalization to unseen data
+
+#### Applying cross-validation to select the best hyperparameter value for fitting a lasso regression model.
+
+```{r}
+set.seed(1234)
+
+# Ensure y_train is a vector
+y_train <- as.vector(y_train)
+
+# Convert matrices to data frames
+X_train_df <- as.data.frame(X_train5)
+X_test_df <- as.data.frame(X_test5)
+
+# Combine the data correctly
+train_data <- cbind(y = y_train, X_train_df)
+
+# Define recipe
+recipe_obj_lasso <- recipe(y ~ ., data = train_data) %>%
+  step_normalize(all_predictors()) |>
+  prep()
+
+# Define the lasso specification
+lasso_spec <- linear_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet")
+
+# Lasso workflow
+lasso_wf <- workflow() |>
+  add_recipe(recipe_obj_lasso)
+
+# Lasso fit
+lasso_fit <- lasso_wf |>
+  add_model(lasso_spec) |>
+  fit(data = train_data)
+
+# Grid of alphas for Lasso
+lambda_grid <- grid_regular(penalty(), levels = 50)
+
+# Tune
+tune_results_lasso <- 
+  tune_grid(lasso_wf |> add_model(lasso_spec),
+  resamples = bootstraps(train_data, times = 5),
+  grid = lambda_grid
+)
+
+# Extract best parameters for Lasso
+best_params_lasso <- tune_results_lasso %>% select_best("rmse")
+
+# Refit the model using Lasso
+lasso_fit <- lasso_spec %>%
+  finalize_model(best_params_lasso) %>%
+  fit(y ~ ., data = train_data)
+
+# Extract coefficients
+lasso_coefs <- lasso_fit$fit$beta[,1]
+
+# Predictions using Lasso
+y_pred_train_lasso <- predict(lasso_fit, new_data = train_data)$.pred
+y_pred_test_lasso <- predict(lasso_fit, new_data = X_test_df)$.pred
+
+# Create the model string for Lasso
+model7 <- sprintf("%.2f X + %.2f X2 + %.2f X3 + %.2f X4 + %.2f X5 + %.2f", 
+                  lasso_coefs[2], lasso_coefs[3], lasso_coefs[4], 
+                  lasso_coefs[5], lasso_coefs[6], lasso_fit$fit$a0[1])
+
+values7 <- c(model7, 
+             sqrt(mean((y_train - y_pred_train_lasso)^2)),
+             sqrt(mean((y_test - y_pred_test_lasso)^2)),
+             sum(abs(lasso_coefs[-1])) + abs(lasso_fit$fit$a0[1]))
+
+# Make the results tibble for Lasso
+lasso_results <- tibble(Model = "LassoCV",
+                        `Train error` = values7[2], 
+                        `Test error` = values7[3], 
+                        `Sum of Absolute Weights` = values7[4])
+
+cat("Selected alpha for Lasso =", best_params_lasso$penalty, "\n")
+```
+
+**Interpretation:**
+
+The value of 1 for alpha suggests that the Lasso model is performing a strict L1 regularization, which introduces sparsity by encouraging some coefficients to be exactly zero. This high penalty indicates strong regularization applied to the coefficients, potentially leading to a simpler model with fewer predictors (features) being considered significant.
+
+```{r}
+lasso_results
+```
+
+**Interpretation:**\
+\
+These metrics provide insights into the performance (errors) and complexity (sum of absolute weights) of the LassoCV model in predicting the target variable. Overall, the values 47.57, 48.70 and 49.25 for Train_error, test_error and sum of absolute weights respectively, suggests that the LassoCV model is performing reasonably well in terms of predictive accuracy on both the training and test datasets while maintaining a moderate level of model complexity indicated by the sum of absolute weights.
+
+## **Summary**
+
+**\
+**1. Multilinear Model:
+
+-   Train Error: 47.57
+
+-   Test Error: 48.89
+
+-   Sum of Absolute Weights: N/A
+
+1.  Ridge Model:
+
+    -   Train Error: 47.57
+
+    -   Test Error: 49.21
+
+    -   Sum of Absolute Weights: 49.26
+
+2.  RidgeCV Model:
+
+    -   Train Error: 47.57
+
+    -   Test Error: 49.24
+
+    -   Sum of Absolute Weights: 49.26
+
+3.  Lasso Model:
+
+    -   Train Error: 47.58
+
+    -   Test Error: 48.70
+
+    -   Sum of Absolute Weights: 49.26
+
+4.  LassoCV Model:
+
+    -   Train Error: 47.58
+
+    -   Test Error: 48.70
+
+    -   Sum of Absolute Weights: 49.26
+
+The multilinear, Ridge, and RidgeCV models have similar performances in terms of train and test errors. However, the Lasso and LassoCV models have slightly higher train errors but slightly lower test errors compared to the other models. All models exhibit similar complexity indicated by the sum of absolute weights. The Ridge, RidgeCV, Lasso, and LassoCV models have the same sum of absolute weights, indicating a similar level of model complexity.
